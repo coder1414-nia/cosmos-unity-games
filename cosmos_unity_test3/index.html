@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>COSMOS_AI</title>
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+      }
+      #unity-container {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+      #unity-canvas {
+        width: 100%;
+        height: 100%;
+        background: #000;
+        display: block;
+      }
+      #unity-loading-bar {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+        color: #fff;
+        font-family: sans-serif;
+      }
+      #unity-progress-bar-empty {
+        width: 200px;
+        height: 8px;
+        margin-top: 10px;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+      #unity-progress-bar-full {
+        width: 0%;
+        height: 100%;
+        background: #ffffff;
+        transition: width 0.1s ease;
+      }
+      #unity-warning {
+        position: absolute;
+        left: 50%;
+        top: 5%;
+        transform: translate(-50%, 0);
+        background: rgba(255, 0, 0, 0.8);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-family: sans-serif;
+        display: none;
+        z-index: 100;
+      }
+      /* 전체화면 버튼 스타일 (우측 하단 & 고급 SVG 아이콘) */
+      #unity-fullscreen-button {
+        position: fixed;
+        bottom: 14px;
+        right: 14px;
+        width: 38px;
+        height: 38px;
+        background: rgba(0, 0, 0, 0.65);
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        border-radius: 6px;
+        cursor: pointer;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        transition: background 0.2s ease, transform 0.1s ease, border-color 0.2s ease;
+      }
+      #unity-fullscreen-button:hover {
+        background: rgba(0, 0, 0, 0.85);
+        border-color: rgba(255, 255, 255, 0.7);
+        transform: scale(1.08);
+      }
+      #unity-fullscreen-button:active {
+        transform: scale(0.95);
+      }
+      #unity-fullscreen-button svg {
+        width: 20px;
+        height: 20px;
+        fill: none;
+        stroke: #ffffff;
+        stroke-width: 2.2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      #rotate-hint {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.9);
+        color: #fff;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+        font-family: sans-serif;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="unity-container">
+      <canvas id="unity-canvas" width=960 height=600 tabindex="-1"></canvas>
+      <div id="unity-loading-bar">
+        <div style="font-size: 14px; opacity: 0.8;">Loading...</div>
+        <div id="unity-progress-bar-empty">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+      </div>
+      <div id="unity-warning"></div>
+    </div>
+
+    <!-- 우측 하단 전체화면 SVG 버튼 -->
+    <button id="unity-fullscreen-button" type="button" title="전체 화면">
+      <svg viewBox="0 0 24 24">
+        <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+      </svg>
+    </button>
+
+    <div id="rotate-hint" aria-hidden="true">
+      <div>
+        <div style="font-size: 32px; margin-bottom: 8px;">↻</div>
+        <div>화면을 가로로 돌려 주세요</div>
+        <div style="font-size: 12px; opacity: 0.7; margin-top: 4px;">Rotate to landscape</div>
+      </div>
+    </div>
+
+    <script>
+      /* --- Pure Auto-Resize Viewport Sync & Fullscreen Button Logic --- */
+      var unityInstance = null;
+
+      (function () {
+        var state = {
+          container: null,
+          canvas: null,
+          lastW: 0,
+          lastH: 0,
+          resizeObserver: null
+        };
+
+        function isMobile() {
+          return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        }
+
+        function viewportSize() {
+          var w = window.innerWidth;
+          var h = window.innerHeight;
+          if (window.visualViewport) {
+            w = Math.round(window.visualViewport.width) || w;
+            h = Math.round(window.visualViewport.height) || h;
+          }
+          return { w: Math.max(1, w), h: Math.max(1, h) };
+        }
+
+        function syncCanvasToViewport(force) {
+          var container = state.container || document.getElementById("unity-container");
+          var canvas = state.canvas || document.getElementById("unity-canvas");
+          if (!container || !canvas) return;
+
+          var size = viewportSize();
+          if (!force && size.w === state.lastW && size.h === state.lastH) return;
+          state.lastW = size.w;
+          state.lastH = size.h;
+
+          container.style.position = "fixed";
+          container.style.left = "0";
+          container.style.top = "0";
+          container.style.width = size.w + "px";
+          container.style.height = size.h + "px";
+
+          canvas.style.display = "block";
+          canvas.style.width = size.w + "px";
+          canvas.style.height = size.h + "px";
+
+          try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+          updateRotateHint();
+        }
+
+        function updateRotateHint() {
+          var hint = document.getElementById("rotate-hint");
+          if (!hint) return;
+          var portrait = window.innerHeight > window.innerWidth;
+          var show = isMobile() && portrait;
+          hint.style.display = show ? "flex" : "none";
+          hint.setAttribute("aria-hidden", show ? "false" : "true");
+        }
+
+        function startObservers() {
+          if (state.resizeObserver) return;
+          var schedule = (function () {
+            var pending = false;
+            return function () {
+              if (pending) return;
+              pending = true;
+              requestAnimationFrame(function () {
+                pending = false;
+                syncCanvasToViewport(false);
+              });
+            };
+          })();
+
+          window.addEventListener("resize", schedule);
+          window.addEventListener("orientationchange", function () {
+            setTimeout(function () { syncCanvasToViewport(true); }, 250);
+          });
+
+          if (window.visualViewport) {
+            window.visualViewport.addEventListener("resize", schedule);
+            window.visualViewport.addEventListener("scroll", schedule);
+          }
+
+          if (typeof ResizeObserver !== "undefined") {
+            state.resizeObserver = new ResizeObserver(schedule);
+            state.resizeObserver.observe(document.documentElement);
+            if (document.body) state.resizeObserver.observe(document.body);
+          }
+
+          setTimeout(function () { syncCanvasToViewport(true); }, 0);
+          setTimeout(function () { syncCanvasToViewport(true); }, 500);
+          setTimeout(function () { syncCanvasToViewport(true); }, 1500);
+        }
+
+        function init() {
+          state.container = document.getElementById("unity-container");
+          state.canvas = document.getElementById("unity-canvas");
+          startObservers();
+          syncCanvasToViewport(true);
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+
+      // 전체화면 버튼 클릭 시 브라우저 Fullscreen API 실행
+      document.getElementById("unity-fullscreen-button").onclick = function (e) {
+        if (e) e.preventDefault();
+        var target = document.documentElement;
+        var isFs = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+        
+        if (!isFs) {
+          var req = target.requestFullscreen || target.webkitRequestFullscreen || target.msRequestFullscreen;
+          if (req) {
+            req.call(target).catch(function(err) {
+              if (unityInstance && unityInstance.SetFullscreen) unityInstance.SetFullscreen(1);
+            });
+          } else if (unityInstance && unityInstance.SetFullscreen) {
+            unityInstance.SetFullscreen(1);
+          }
+        } else {
+          var exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+          if (exit) exit.call(document);
+          else if (unityInstance && unityInstance.SetFullscreen) {
+            unityInstance.SetFullscreen(0);
+          }
+        }
+      };
+
+      /* --- Unity Instance Initialization --- */
+      var container = document.querySelector("#unity-container");
+      var canvas = document.querySelector("#unity-canvas");
+      var loadingBar = document.querySelector("#unity-loading-bar");
+      var progressBarFull = document.querySelector("#unity-progress-bar-full");
+      var warningBanner = document.querySelector("#unity-warning");
+
+      function unityShowBanner(msg, type) {
+        function updateBannerVisibility() {
+          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+        }
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        warningBanner.appendChild(div);
+        if (type == 'error') div.style = 'background: red; padding: 10px;';
+        else {
+          if (type == 'warning') div.style = 'background: yellow; padding: 10px;';
+          setTimeout(function() {
+            if (warningBanner.contains(div)) warningBanner.removeChild(div);
+            updateBannerVisibility();
+          }, 5000);
+        }
+        updateBannerVisibility();
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/ai_3_build.loader.js";
+      var config = {
+        dataUrl: buildUrl + "/ai_3_build.data.unityweb",
+        frameworkUrl: buildUrl + "/ai_3_build.framework.js.unityweb",
+        codeUrl: buildUrl + "/ai_3_build.wasm.unityweb",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "DefaultCompany",
+        productName: "COSMOS_AI",
+        productVersion: "0.1",
+        showBanner: unityShowBanner,
+        matchWebGLToCanvasSize: true,
+      };
+
+      loadingBar.style.display = "block";
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = () => {
+        createUnityInstance(canvas, config, (progress) => {
+          progressBarFull.style.width = 100 * progress + "%";
+        }).then((instance) => {
+          unityInstance = instance;
+          loadingBar.style.display = "none";
+        }).catch((message) => {
+          alert(message);
+        });
+      };
+
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
